@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no">
+<title>神グラフ電卓 Pro+</title>
+<style>
+body{
+  margin:0;
+  background:#111;
+  color:white;
+  font-family:Arial;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+}
+.top{
+  padding:8px;
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+  justify-content:center;
+}
+input,button{
+  padding:6px;
+  font-size:15px;
+}
+canvas{
+  background:white;
+  border-radius:12px;
+  touch-action:none;
+}
+</style>
+</head>
+<body>
+
+<div class="top">
+  f(x)=<input id="expr" value="x^2">
+  ∫ from <input id="intA" value="0" size="4">
+  to <input id="intB" value="2" size="4">
+  x=<input id="tanX" value="1" size="4">
+  <button onclick="toggleGrid()">Grid</button>
+  <button onclick="showIntegral()">積分表示</button>
+  <button onclick="toggleTangent()">接線</button>
+</div>
+
+<canvas id="graph"></canvas>
+
+<script>
+const canvas=document.getElementById("graph");
+const ctx=canvas.getContext("2d");
+
+let scale=50;
+let offsetX=0,offsetY=0;
+let showGrid=true;
+let integralValue=null;
+let showTangent=false;
+
+function resize(){
+  canvas.width=window.innerWidth*0.95;
+  canvas.height=window.innerHeight*0.7;
+  drawAll();
+}
+window.addEventListener("resize",resize);
+
+/* ===== 数式処理 ===== */
+
+function convert(expr){
+  expr=expr.replace(/\^/g,"**");
+  expr=expr.replace(/(\d)x/g,"$1*x");
+  expr=expr.replace(/sin/g,"Math.sin");
+  expr=expr.replace(/cos/g,"Math.cos");
+  expr=expr.replace(/tan/g,"Math.tan");
+  expr=expr.replace(/log/g,"Math.log");
+  expr=expr.replace(/sqrt/g,"Math.sqrt");
+  return expr;
+}
+function makeFunction(expr){
+  try{
+    return new Function("x","return "+convert(expr));
+  }catch{
+    return x=>NaN;
+  }
+}
+function derivative(f,x){
+  let h=0.0001;
+  return (f(x+h)-f(x-h))/(2*h);
+}
+function integrate(f,a,b,n=600){
+  let h=(b-a)/n;
+  let sum=0;
+  for(let i=0;i<n;i++){
+    let x1=a+i*h;
+    let x2=x1+h;
+    sum+=(f(x1)+f(x2))*h/2;
+  }
+  return sum;
+}
+
+/* ===== 座標変換 ===== */
+
+function toCanvasX(x){return canvas.width/2+offsetX+x*scale;}
+function toCanvasY(y){return canvas.height/2+offsetY-y*scale;}
+function toMathX(px){return (px-canvas.width/2-offsetX)/scale;}
+
+/* ===== グリッド＆軸 ===== */
+
+function drawGrid(){
+
+  let visibleX = canvas.width / scale / 2;
+  let visibleY = canvas.height / scale / 2;
+
+  let startX = -visibleX - offsetX/scale;
+  let endX   =  visibleX - offsetX/scale;
+  let startY = -visibleY + offsetY/scale;
+  let endY   =  visibleY + offsetY/scale;
+
+  let baseStep=1;
+  if(scale<20) baseStep=10;
+  if(scale<10) baseStep=50;
+  if(scale>100) baseStep=0.5;
+  if(scale>200) baseStep=0.1;
+
+  ctx.lineWidth=1;
+
+  for(let x=Math.floor(startX/baseStep)*baseStep;x<=endX;x+=baseStep){
+    let px=toCanvasX(x);
+    ctx.strokeStyle="#eee";
+    ctx.beginPath();
+    ctx.moveTo(px,0);
+    ctx.lineTo(px,canvas.height);
+    ctx.stroke();
+  }
+
+  for(let y=Math.floor(startY/baseStep)*baseStep;y<=endY;y+=baseStep){
+    let py=toCanvasY(y);
+    ctx.strokeStyle="#eee";
+    ctx.beginPath();
+    ctx.moveTo(0,py);
+    ctx.lineTo(canvas.width,py);
+    ctx.stroke();
+  }
+
+  /* 軸 */
+  ctx.lineWidth=2;
+  ctx.strokeStyle="black";
+  ctx.beginPath();
+  ctx.moveTo(toCanvasX(0),0);
+  ctx.lineTo(toCanvasX(0),canvas.height);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(0,toCanvasY(0));
+  ctx.lineTo(canvas.width,toCanvasY(0));
+  ctx.stroke();
+}
+
+/* ===== 関数描画 ===== */
+
+function drawFunction(f,color){
+  ctx.strokeStyle=color;
+  ctx.lineWidth=2;
+  ctx.beginPath();
+  let first=true;
+  let lastY=null;
+
+  for(let px=0;px<canvas.width;px++){
+    let x=toMathX(px);
+    let y=f(x);
+
+    if(!isFinite(y) || Math.abs(y)>1e6){
+      first=true;
+      continue;
+    }
+
+    let py=toCanvasY(y);
+
+    if(lastY!==null && Math.abs(py-lastY)>canvas.height){
+      first=true;
+    }
+
+    if(first){
+      ctx.moveTo(px,py);
+      first=false;
+    }else{
+      ctx.lineTo(px,py);
+    }
+    lastY=py;
+  }
+  ctx.stroke();
+}
+
+/* ===== 積分塗り ===== */
+
+function drawIntegralArea(f,a,b){
+  ctx.fillStyle="rgba(0,0,255,0.2)";
+  ctx.beginPath();
+  ctx.moveTo(toCanvasX(a),toCanvasY(0));
+
+  for(let x=a;x<=b;x+=(b-a)/300){
+    ctx.lineTo(toCanvasX(x),toCanvasY(f(x)));
+  }
+
+  ctx.lineTo(toCanvasX(b),toCanvasY(0));
+  ctx.closePath();
+  ctx.fill();
+}
+
+/* ===== 接線 ===== */
+
+function drawTangentLine(f,x0){
+  let y0=f(x0);
+  let slope=derivative(f,x0);
+  drawFunction(x=>slope*(x-x0)+y0,"green");
+}
+
+/* ===== メイン描画 ===== */
+
+function drawAll(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  if(showGrid) drawGrid();
+
+  let f=makeFunction(expr.value);
+
+  if(integralValue!==null){
+    let a=parseFloat(intA.value);
+    let b=parseFloat(intB.value);
+    drawIntegralArea(f,a,b);
+  }
+
+  drawFunction(f,"red");
+  drawFunction(x=>derivative(f,x),"blue");
+
+  if(showTangent){
+    let x0=parseFloat(tanX.value);
+    drawTangentLine(f,x0);
+  }
+
+  if(integralValue!==null){
+    ctx.fillStyle="black";
+    ctx.fillText("∫ = "+integralValue.toFixed(6),20,20);
+  }
+}
+
+/* ===== UI ===== */
+
+function toggleGrid(){showGrid=!showGrid;drawAll();}
+function toggleTangent(){showTangent=!showTangent;drawAll();}
+function showIntegral(){
+  let f=makeFunction(expr.value);
+  integralValue=integrate(f,parseFloat(intA.value),parseFloat(intB.value));
+  drawAll();
+}
+
+canvas.addEventListener("wheel",e=>{
+  e.preventDefault();
+  scale*=e.deltaY<0?1.1:0.9;
+  drawAll();
+});
+
+let dragging=false,lastX,lastY;
+
+canvas.addEventListener("mousedown",e=>{
+  dragging=true;
+  lastX=e.clientX;
+  lastY=e.clientY;
+});
+canvas.addEventListener("mouseup",()=>dragging=false);
+canvas.addEventListener("mousemove",e=>{
+  if(!dragging)return;
+  offsetX+=e.clientX-lastX;
+  offsetY+=e.clientY-lastY;
+  lastX=e.clientX;
+  lastY=e.clientY;
+  drawAll();
+});
+
+/* タッチ対応 */
+canvas.addEventListener("touchstart",e=>{
+  dragging=true;
+  lastX=e.touches[0].clientX;
+  lastY=e.touches[0].clientY;
+});
+canvas.addEventListener("touchmove",e=>{
+  if(!dragging)return;
+  offsetX+=e.touches[0].clientX-lastX;
+  offsetY+=e.touches[0].clientY-lastY;
+  lastX=e.touches[0].clientX;
+  lastY=e.touches[0].clientY;
+  drawAll();
+});
+canvas.addEventListener("touchend",()=>dragging=false);
+
+expr.addEventListener("input",drawAll);
+
+resize();
+</script>
+</body>
+</html>
